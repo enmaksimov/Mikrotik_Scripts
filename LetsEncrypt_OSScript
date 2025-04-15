@@ -1,0 +1,41 @@
+:local dnsName
+#Use d for days or w for weeks at the end of variable value
+:local Daysbefore 30d 
+# Uncomment the line below if you have a public DNS hostname configured
+# :local dnsName example.com
+:if ( [:len $dnsName] = 0 ) do={
+	# Check IP Cloud #
+	:if ( ![/ip cloud/ get ddns-enabled] ) do={
+		:log error "[Letsencrypt_OSScript] - IP Cloud not enable - Waiting... "
+		/ip cloud set ddns-enabled=yes update-time=yes
+		/ip cloud force-update
+	}
+	:log info "[Letsencrypt_OSScript] - Use Cloud DynDNS Name"
+	:local dnsName [:put [/ip cloud get dns-name]]
+}
+:do { :local cert [/certificate get [find common-name=$dnsName]] } on-error={ :local cert "" }
+:if ( [:len $cert] = 0 || [/certificate get $cert expires-after] < $Daysbefore || [/certificate get $cert expired] ) do={
+	:log info "[Letsencrypt_OSScript] - Open doors"
+	/ip firewall/filter/add chain=input dst-port=80 protocol=tcp action=accept place-before=*0 comment="LetsEncrypt_OSScript"
+	/ip service enable [find port=80]
+	# Get LetsEncrypt certificate #
+	:log info "[Letsencrypt_OSScript] - Get LetsEncrypt certificate"
+	/certificate enable-ssl-certificate dns-name=$dnsName
+	:if ( [/log print count-only where (([:timestamp]+([/system clock get gmt-offset]."s"))-[:totime (time)]) <= 1m && topics~"acme-client.error"] > 0 ) do={
+		:log error "[Letsencrypt_OSScript] - Unable to generate certification - Close doors"
+	} else={
+		:log info "[Letsencrypt_OSScript] - Certificate Updated, delay 90 second"
+		:delay 90s
+		:local certName [/certificate get [find common-name=$dnsName]]
+		#Set new certificate in SSTP Profile
+		:log info "[Letsencrypt_OSScript] - Set new certificate in SSTP Profile"
+		/interface sstp-server server
+		set certificate=$certName
+	}
+	:log info "[Letsencrypt_OSScript] - Close doors"
+	# Remove custom firewall roule and disable services #
+	/ip firewall/filter/remove [find comment="LetsEncrypt_OSScript"]
+	/ip service disable [find port=80];
+} else={
+	:log info "[Letsencrypt_OSScript] - Nothing to do!"
+}
